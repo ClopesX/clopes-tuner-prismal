@@ -5,7 +5,14 @@ import android.app.Activity
 import android.content.SharedPreferences
 import android.content.res.ColorStateList
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.LayerDrawable
+import android.content.Intent
+import java.io.File
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
@@ -137,19 +144,34 @@ class MainActivity : Activity() {
         }
     }
 
-    private val bgColor = Color.parseColor("#0b0f14")
-    private val cardColor = Color.parseColor("#111823")
-    private val activeTabColor = Color.parseColor("#1b2b45")
-    private val textColor = Color.parseColor("#e8eef7")
-    private val mutedColor = Color.parseColor("#7d8ca1")
-    private val accent = Color.parseColor("#4c8dff")
-    private val okColor = Color.parseColor("#37d67a")
-    private val warnColor = Color.parseColor("#f5a623")
-    private val badColor = Color.parseColor("#ff5c5c")
+    private lateinit var theme: AppTheme
+    private var backdrop: Bitmap? = null
+    private var backdropChoice = 0
+    private var prismalCa = 0.35f
+    private var textGlow = 8f
+    private var glassThickness = 260f
+    private var lastCaRefresh = 0L
+    private var returnToSettings = false
+    private var bgColor = Palette.bg
+    private var cardColor = Palette.card
+    private var activeTabColor = Color.parseColor("#1b2b45")
+    private var textColor = Palette.text
+    private var mutedColor = Color.parseColor("#7d8ca1")
+    private var accent = Palette.accent
+    private var okColor = Palette.ok
+    private var warnColor = Palette.warn
+    private var badColor = Palette.bad
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("clopes_tuner", MODE_PRIVATE)
+        theme = Themes.load(this)
+        applyTheme(theme)
+        prismalCa = prefs.getFloat(KEY_PRISMAL_CA, 35f)
+        textGlow = prefs.getFloat(KEY_TEXT_GLOW, 8f)
+        glassThickness = prefs.getFloat(KEY_GLASS_THICKNESS, 260f)
+        backdropChoice = prefs.getInt(KEY_BACKDROP_CHOICE, 0)
+        backdrop = loadBackdrop()
         eggUnlocked = prefs.getBoolean(KEY_EGG_UNLOCKED, false)
         eggEnabled = prefs.getBoolean(KEY_EGG_ENABLED, true)
         keepScreenOnPref = prefs.getBoolean(KEY_KEEP_SCREEN, true)
@@ -163,6 +185,13 @@ class MainActivity : Activity() {
             handler.post { updateBeatBars(beat) }
         }
         setContentView(buildScreen())
+        applySystemBars()
+        if (::noteText.isInitialized) noteText.tag = "no_glow"
+        applyPrismalEffects()
+        if (returnToSettings) {
+            returnToSettings = false
+            switchTab(TAB_SETTINGS)
+        }
     }
 
     override fun onResume() {
@@ -316,7 +345,7 @@ class MainActivity : Activity() {
         // Sem ScrollView: as telas cabem inteiras, entao nada de rolagem.
         val scroller = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(bgColor)
+            setBackgroundColor(Color.TRANSPARENT)
         }
 
         val content = LinearLayout(this).apply {
@@ -365,7 +394,7 @@ class MainActivity : Activity() {
             insets
         }
 
-        val root = FrameLayout(this).apply { setBackgroundColor(bgColor) }
+        val root = FrameLayout(this).apply { background = rootBackground() }
         root.addView(scroller, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -499,6 +528,11 @@ class MainActivity : Activity() {
         scrim.alpha = 1f
     }
     private fun buildSettingsScreen(): LinearLayout {
+        val outer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val settingsScroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            isFillViewport = true
+        }
         val screen = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val card = card()
         card.addView(sectionLabel("CONFIGURAÇÕES"))
@@ -576,6 +610,162 @@ class MainActivity : Activity() {
         aboutRow.setOnClickListener { showAbout() }
         card.addView(aboutRow)
 
+        val themeRow = settingsRow("Tema")
+        themeRow.addView(TextView(this).apply {
+            text = theme.label
+            setTextColor(accent)
+            textSize = 14f
+        })
+        themeRow.setOnClickListener { showThemeDialog() }
+        card.addView(themeRow)
+
+        // o fundo de vidro so faz sentido no tema Prismal
+        if (theme.id == "prismal") {
+            val photoRow = settingsRow("Foto de fundo")
+            photoRow.addView(TextView(this).apply {
+                text = when (backdropChoice) {
+                    1 -> "fundo 2"
+                    2 -> "minha foto"
+                    else -> "fundo 1"
+                }
+                setTextColor(accent)
+                textSize = 14f
+            })
+            photoRow.setOnClickListener { showBackdropDialog() }
+            card.addView(photoRow)
+        }
+
+        if (theme.id == "prismal") {
+            val thickRow = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(12), 0, dp(4))
+            }
+            val thickHeader = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            thickHeader.addView(TextView(this).apply {
+                text = "Espessura do vidro"
+                setTextColor(textColor)
+                textSize = 16f
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val thickLabel = TextView(this).apply {
+                text = "${glassThickness.toInt()} dp"
+                setTextColor(accent)
+                textSize = 14f
+            }
+            thickHeader.addView(thickLabel)
+            thickRow.addView(thickHeader)
+            thickRow.addView(SeekBar(this).apply {
+                max = 300
+                progress = glassThickness.toInt().coerceIn(0, 300)
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                        glassThickness = progress.toFloat()
+                        glassViews().forEach { it.setThickness(dp(progress).toFloat()) }
+                        thickLabel.text = "$progress dp"
+                        prefs.edit().putFloat(KEY_GLASS_THICKNESS, glassThickness).apply()
+                    }
+
+                    override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                    override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                        // espessura e geometria: o Prismal calcula na criacao do cartao,
+                        // entao recriamos a tela ao soltar (como no slider de aberracao)
+                        returnToSettings = true
+                        recreate()
+                    }
+                })
+            })
+            card.addView(thickRow)
+            val caRow = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(12), 0, dp(4))
+            }
+            val caHeader = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            caHeader.addView(TextView(this).apply {
+                text = "Aberração cromática"
+                setTextColor(textColor)
+                textSize = 16f
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val caLabel = TextView(this).apply {
+                text = String.format(Locale.US, "%.2f", prismalCa)
+                setTextColor(accent)
+                textSize = 14f
+            }
+            caHeader.addView(caLabel)
+            caRow.addView(caHeader)
+            caRow.addView(SeekBar(this).apply {
+                max = 500
+                progress = (prismalCa * 10f).toInt().coerceIn(0, 500)
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                        prismalCa = progress / 10f
+                        caLabel.text = String.format(Locale.US, "%.2f", prismalCa)
+                        prefs.edit().putFloat(KEY_PRISMAL_CA, prismalCa).apply()
+                        val now = System.currentTimeMillis()
+                        if (now - lastCaRefresh > 120) {
+                            lastCaRefresh = now
+                            glassViews().forEach {
+                                it.setChromaticAberration(prismalCa)
+                                it.updateBackground()
+                            }
+                        }
+                    }
+
+                    override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                    override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                        glassViews().forEach {
+                            it.setChromaticAberration(prismalCa)
+                            it.updateBackground()
+                        }
+                    }
+                })
+            })
+            card.addView(caRow)
+        }
+
+        run {
+            val glowRow = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(12), 0, dp(4))
+            }
+            val glowHeader = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            glowHeader.addView(TextView(this).apply {
+                text = "Brilho do texto"
+                setTextColor(textColor)
+                textSize = 16f
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val glowLabel = TextView(this).apply {
+                text = "${textGlow.toInt()} dp"
+                setTextColor(accent)
+                textSize = 14f
+            }
+            glowHeader.addView(glowLabel)
+            glowRow.addView(glowHeader)
+            glowRow.addView(SeekBar(this).apply {
+                max = 24
+                progress = textGlow.toInt().coerceIn(0, 24)
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                        textGlow = progress.toFloat()
+                        glowLabel.text = "$progress dp"
+                        prefs.edit().putFloat(KEY_TEXT_GLOW, textGlow).apply()
+                        applyTextGlow(textGlow)
+                    }
+
+                    override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                    override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+                })
+            })
+            card.addView(glowRow)
+        }
+
         val resetRow = settingsRow("Restaurar padrão")
         resetSwitch = settingsSwitch(false) { checked ->
             if (checked && !restoringDefaults) {
@@ -615,7 +805,15 @@ class MainActivity : Activity() {
         screen.addView(referenceCard, cardParams(top = 12))
 
         refreshSettingsVisibility()
-        return screen
+        settingsScroll.addView(screen, android.widget.FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ))
+        outer.addView(settingsScroll, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+        ))
+        return outer
     }
 
     private fun settingsRow(label: String): LinearLayout = LinearLayout(this).apply {
@@ -652,6 +850,58 @@ class MainActivity : Activity() {
         refreshSettingsVisibility()
         refreshMeterVisibility()
         updateKeepScreenOn()
+    }
+
+    /** Cor das barras do sistema e icones claros/escuros conforme o tema. */
+    private fun applySystemBars() {
+        val light = theme.id == "light"
+        val barColor = if (theme.cardGlass) android.graphics.Color.TRANSPARENT else theme.bg
+        window.statusBarColor = barColor
+        window.navigationBarColor = theme.bg
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            val controller = window.decorView.windowInsetsController ?: return
+            val mask = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+            controller.setSystemBarsAppearance(if (light) mask else 0, mask)
+        } else {
+            @Suppress("DEPRECATION")
+            var flags = window.decorView.systemUiVisibility
+            flags = if (light) {
+                flags or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+            } else {
+                flags and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
+            }
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = flags
+        }
+    }
+
+    /** Aplica a paleta do tema nas cores usadas pela tela inteira. */
+    private fun applyTheme(value: AppTheme) {
+        theme = value
+        bgColor = value.bg
+        cardColor = value.card
+        activeTabColor = value.tab
+        textColor = value.text
+        mutedColor = value.muted
+        accent = value.accent
+        okColor = value.ok
+        warnColor = value.warn
+        badColor = value.bad
+        Palette.apply(value)
+    }
+
+    private fun showThemeDialog() {
+        val labels = Themes.all.map { it.label }.toTypedArray()
+        val selected = Themes.all.indexOfFirst { it.id == theme.id }.coerceAtLeast(0)
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Tema")
+            .setSingleChoiceItems(labels, selected) { dialog, which ->
+                Themes.save(this, Themes.all[which])
+                dialog.dismiss()
+                recreate()
+            }
+            .show()
     }
 
     private fun showAbout() {
@@ -757,6 +1007,7 @@ class MainActivity : Activity() {
                 Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
             )
             text = label
+            setTextColor(textColor)
         }
         titles.addView(title)
         titles.addView(TextView(this).apply {
@@ -837,7 +1088,16 @@ class MainActivity : Activity() {
     private fun buildTunerScreen(): LinearLayout {
         val screen = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
-        screen.addView(buildTuningStrip())
+        screen.addView(
+            buildTuningStrip(),
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                marginStart = -dp(20)
+                marginEnd = -dp(20)
+            },
+        )
 
         val reading = card()
         screen.addView(reading, cardParams(top = 12))
@@ -993,10 +1253,11 @@ class MainActivity : Activity() {
         val scroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             clipToPadding = false
+            setPadding(dp(20), 0, dp(20), 0)
         }
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(2), dp(2), dp(2))
+            setPadding(0, dp(2), 0, dp(2))
         }
 
         val icons = listOf(
@@ -1022,9 +1283,39 @@ class MainActivity : Activity() {
                 scaleType = ImageView.ScaleType.FIT_CENTER
                 setPadding(dp(13), dp(13), dp(13), dp(13))
             }
-            cell.addView(icon, LinearLayout.LayoutParams(dp(58), dp(58)))
+            if (theme.id == "prismal" && Build.VERSION.SDK_INT >= 31) {
+                // copia borrada do proprio icone = glow azul (RenderEffect)
+                val frame = android.widget.FrameLayout(this)
+                val glow = ImageView(this).apply {
+                    setImageResource(icons.getOrElse(index) { R.drawable.ic_instr_cromatico })
+                    scaleType = ImageView.ScaleType.FIT_CENTER
+                    setPadding(dp(13), dp(13), dp(13), dp(13))
+                    setColorFilter(accent)
+                    alpha = 0.95f
+                    scaleX = 1.16f
+                    scaleY = 1.16f
+                    setRenderEffect(
+                        android.graphics.RenderEffect.createBlurEffect(
+                            dp(7).toFloat(),
+                            dp(7).toFloat(),
+                            android.graphics.Shader.TileMode.DECAL,
+                        ),
+                    )
+                    visibility = View.GONE
+                }
+                frame.addView(glow, android.widget.FrameLayout.LayoutParams(dp(58), dp(58)).apply {
+                    gravity = Gravity.CENTER
+                })
+                frame.addView(icon, android.widget.FrameLayout.LayoutParams(dp(58), dp(58)).apply {
+                    gravity = Gravity.CENTER
+                })
+                cell.addView(frame, LinearLayout.LayoutParams(dp(58), dp(58)))
+                icon.tag = glow
+            } else {
+                cell.addView(icon, LinearLayout.LayoutParams(dp(58), dp(58)))
+            }
             row.addView(cell, LinearLayout.LayoutParams(dp(66), dp(66)).apply {
-                rightMargin = dp(10)
+                rightMargin = if (index == Tunings.all.lastIndex) 0 else dp(10)
             })
             tuningCells.add(cell to icon)
         }
@@ -1056,9 +1347,11 @@ class MainActivity : Activity() {
         tuningCells.forEachIndexed { index, (cell, icon) ->
             val selected = index == selectedIndex
             cell.setBackground(
-                rounded(if (selected) Color.parseColor("#16233A") else cardColor, 18),
+                rounded(if (selected) Palette.selected else cardColor, 18),
             )
-            icon.setColorFilter(if (selected) accent else Color.parseColor("#8A97A8"))
+            // glow do icone: implementacao em andamento (ver GlowIconView)
+            icon.setColorFilter(if (selected) accent else Palette.muted)
+            (icon.tag as? ImageView)?.visibility = if (selected) View.VISIBLE else View.GONE
         }
     }
 
@@ -1373,7 +1666,7 @@ class MainActivity : Activity() {
 
     private fun neighborNote(): TextView = TextView(this).apply {
         text = ""
-        setTextColor(Color.parseColor("#3d4a5c"))
+        setTextColor(Palette.muted)
         textSize = 26f
         setTypeface(typeface, Typeface.BOLD)
         gravity = Gravity.CENTER
@@ -1410,10 +1703,251 @@ class MainActivity : Activity() {
         noteRow.visibility = if (visible) View.VISIBLE else View.GONE
     }
 
-    private fun card(): LinearLayout = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        setBackground(rounded(cardColor, 18))
-        setPadding(dp(16), dp(14), dp(16), dp(14))
+    private fun card(): LinearLayout {
+        if (theme.id == "prismal") return GlassCardLayout(this)
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackground(
+                if (theme.cardGlass) {
+                    GlassCardDrawable(dp(18).toFloat(), 1.5f * resources.displayMetrics.density)
+                } else {
+                    rounded(cardColor, 18)
+                },
+            )
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+        }
+    }
+
+    /**
+     * Cartao de vidro liquido (Prismal).
+     *
+     * E um LinearLayout para preservar a API do app: o vidro fica numa camada propria
+     * atras do conteudo, e os filhos adicionados ao cartao vao para essa camada de
+     * conteudo, herdando orientacao, gravidade e padding.
+     */
+    private inner class GlassCardLayout(context: android.content.Context) : LinearLayout(context) {
+
+        private val content = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+        }
+        private val frame = android.widget.FrameLayout(context)
+        private val glass: com.matrix.prismal.PrismalFrameLayout
+        private var initializing = true
+
+        init {
+            orientation = LinearLayout.VERTICAL
+            glass = layoutInflater.inflate(R.layout.glass_card, frame, false)
+                as com.matrix.prismal.PrismalFrameLayout
+            glass.addView(content, android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+            ))
+            frame.addView(glass, android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+            ))
+            super.addView(frame, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ))
+            initializing = false
+        }
+
+        /**
+         * O GLSurfaceView do Prismal mede MATCH_PARENT e, num pai wrap_content, inflava o
+         * cartao ate a tela inteira. Medimos o conteudo antes para fixar a altura exata.
+         */
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val width = MeasureSpec.getSize(widthMeasureSpec)
+            content.measure(
+                MeasureSpec.makeMeasureSpec(width, MeasureSpec.AT_MOST),
+                MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED),
+            )
+            // respeita minimumHeight (ex.: cartao TOCAR do metronomo) e centraliza o conteudo
+            val target = maxOf(content.measuredHeight, minimumHeight)
+            if (target > 0) {
+                glass.layoutParams = (glass.layoutParams).apply { height = target }
+                frame.layoutParams = (frame.layoutParams).apply { height = target }
+                (content.layoutParams as? android.widget.FrameLayout.LayoutParams)?.gravity =
+                    Gravity.CENTER
+            }
+            super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(target, MeasureSpec.EXACTLY))
+        }
+
+        override fun setOrientation(value: Int) {
+            super.setOrientation(value)
+            if (!initializing) content.orientation = value
+        }
+
+        override fun setGravity(value: Int) {
+            super.setGravity(value)
+            if (!initializing) content.gravity = value
+        }
+
+        override fun setPadding(left: Int, top: Int, right: Int, bottom: Int) {
+            if (initializing) super.setPadding(left, top, right, bottom) else content.setPadding(left, top, right, bottom)
+        }
+
+        override fun addView(child: View?) {
+            if (initializing) super.addView(child) else content.addView(child)
+        }
+
+        override fun addView(child: View?, params: ViewGroup.LayoutParams?) {
+            if (initializing) super.addView(child, params) else content.addView(child, params)
+        }
+
+        override fun addView(child: View?, index: Int) {
+            if (initializing) super.addView(child, index) else content.addView(child, index)
+        }
+
+        override fun addView(child: View?, index: Int, params: ViewGroup.LayoutParams?) {
+            if (initializing) super.addView(child, index, params) else content.addView(child, index, params)
+        }
+    }
+    /** Fonte de fundo: foto do usuario (tema Prismal) ou o gradiente do tema. */
+    private fun rootBackground(): android.graphics.drawable.Drawable {
+        val photo = backdrop
+        if (theme.id == "prismal" && photo != null) {
+            val metrics = resources.displayMetrics
+            val covered = coverBitmap(photo, metrics.widthPixels, metrics.heightPixels)
+            val image = BitmapDrawable(resources, covered).apply { gravity = Gravity.FILL }
+            val scrim = ColorDrawable(0x77000000)
+            return LayerDrawable(arrayOf(image, scrim))
+        }
+        return Themes.background(theme)
+    }
+
+    /** Recorta a foto em "cover": mantem a proporcao e corta o excedente. */
+    private fun coverBitmap(source: Bitmap, targetWidth: Int, targetHeight: Int): Bitmap {
+        if (targetWidth <= 0 || targetHeight <= 0) return source
+        val scale = maxOf(
+            targetWidth.toFloat() / source.width,
+            targetHeight.toFloat() / source.height,
+        )
+        val scaledWidth = (source.width * scale).toInt().coerceAtLeast(targetWidth)
+        val scaledHeight = (source.height * scale).toInt().coerceAtLeast(targetHeight)
+        val scaled = Bitmap.createScaledBitmap(source, scaledWidth, scaledHeight, true)
+        val x = ((scaledWidth - targetWidth) / 2).coerceAtLeast(0)
+        val y = ((scaledHeight - targetHeight) / 2).coerceAtLeast(0)
+        return Bitmap.createBitmap(scaled, x, y, targetWidth, targetHeight)
+    }
+
+    /** Todos os cartoes de vidro do Prismal na tela. */
+    private fun glassViews(): List<com.matrix.prismal.PrismalFrameLayout> {
+        val found = mutableListOf<com.matrix.prismal.PrismalFrameLayout>()
+        fun walk(view: View) {
+            if (view is com.matrix.prismal.PrismalFrameLayout) found.add(view)
+            if (view is ViewGroup) for (index in 0 until view.childCount) walk(view.getChildAt(index))
+        }
+        walk(window.decorView)
+        return found
+    }
+
+    private fun applyPrismalEffects() {
+        if (theme.id == "prismal") {
+            glassViews().forEach {
+                it.setChromaticAberration(prismalCa)
+                it.setThickness(dp(glassThickness.toInt()).toFloat())
+            }
+        }
+        applyTextGlow(textGlow)
+    }
+
+    /** Halo do texto: mesma cor do texto, clareada, como um neon. */
+    private fun glowFor(base: Int): Int {
+        val r = Color.red(base)
+        val g = Color.green(base)
+        val b = Color.blue(base)
+        val lighten = 0.45f
+        val lr = (r + (255 - r) * lighten).toInt()
+        val lg = (g + (255 - g) * lighten).toInt()
+        val lb = (b + (255 - b) * lighten).toInt()
+        return Color.argb(0xCC, lr, lg, lb)
+    }
+
+    /** Aplica (ou remove) o brilho nos textos de toda a tela. */
+    private fun applyTextGlow(radiusDp: Float) {
+        val radiusPx = radiusDp * resources.displayMetrics.density
+        fun walk(view: View) {
+            if (view is TextView && view.tag != "no_glow") {
+                if (radiusPx <= 0.5f) {
+                    view.setShadowLayer(0f, 0f, 0f, 0)
+                } else {
+                    view.setShadowLayer(radiusPx, 0f, 0f, glowFor(view.currentTextColor))
+                }
+            }
+            if (view is ViewGroup) for (index in 0 until view.childCount) walk(view.getChildAt(index))
+        }
+        walk(window.decorView)
+    }
+
+    private fun backdropFile(): File = File(filesDir, "backdrop.jpg")
+
+    private fun loadBackdrop(): Bitmap? = runCatching {
+        if (backdropChoice == 2) {
+            val file = backdropFile()
+            if (file.exists()) {
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(file.absolutePath, bounds)
+                var sample = 1
+                while (bounds.outWidth / sample > 1440) sample *= 2
+                return@runCatching BitmapFactory.decodeFile(
+                    file.absolutePath,
+                    BitmapFactory.Options().apply { inSampleSize = sample },
+                )
+            }
+        }
+        val res = if (backdropChoice == 1) R.drawable.prismal_bg_2 else R.drawable.prismal_bg_1
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        resources.openRawResource(res).use { BitmapFactory.decodeStream(it, null, bounds) }
+        var sample = 1
+        while (bounds.outWidth / sample > 1440) sample *= 2
+        resources.openRawResource(res).use {
+            BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
+        }
+    }.getOrNull()
+
+    private fun showBackdropDialog() {
+        val labels = arrayOf("Fundo 1 (padrão)", "Fundo 2", "Escolher da galeria…")
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Foto de fundo")
+            .setSingleChoiceItems(labels, backdropChoice) { dialog, which ->
+                dialog.dismiss()
+                if (which == 2) {
+                    pickBackdrop()
+                } else {
+                    backdropChoice = which
+                    prefs.edit().putInt(KEY_BACKDROP_CHOICE, which).apply()
+                    backdrop = loadBackdrop()
+                    recreate()
+                }
+            }
+            .show()
+    }
+
+    private fun pickBackdrop() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "image/*"
+        }
+        startActivityForResult(intent, REQUEST_BACKDROP)
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_BACKDROP || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        runCatching {
+            contentResolver.openInputStream(uri)?.use { input ->
+                backdropFile().outputStream().use { output -> input.copyTo(output) }
+            }
+        }.onSuccess {
+            backdropChoice = 2
+            prefs.edit().putInt(KEY_BACKDROP_CHOICE, 2).apply()
+            backdrop = loadBackdrop()
+            recreate()
+        }
     }
 
     private fun cardParams(top: Int): LinearLayout.LayoutParams =
@@ -1439,10 +1973,16 @@ class MainActivity : Activity() {
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
+    private val REQUEST_BACKDROP = 1001
+
     companion object {
         private const val KEY_EGG_ENABLED = "egg_enabled"
         private const val KEY_KEEP_SCREEN = "keep_screen"
         private const val KEY_SHOW_DB = "show_db"
+        private const val KEY_PRISMAL_CA = "prismal_ca"
+        private const val KEY_TEXT_GLOW = "text_glow"
+        private const val KEY_GLASS_THICKNESS = "glass_thickness"
+        private const val KEY_BACKDROP_CHOICE = "backdrop_choice"
         private const val KEY_EGG_TOLERANCE = "egg_tolerance"
         private const val REQUEST_AUDIO = 42
         private val TOLERANCE_VALUES = listOf(50, 70, 90, 120)
@@ -1453,6 +1993,57 @@ class MainActivity : Activity() {
         private const val KEY_EGG_UNLOCKED = "egg_unlocked"
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

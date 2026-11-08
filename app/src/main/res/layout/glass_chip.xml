@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Chip de instrumento com vidro do Prismal. -->
+<com.matrix.prismal.PrismalFrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    app:pfl_cornerRadius="18dp"
+    app:pfl_blurRadius="10"
+    app:pfl_glassColor="#1FFFFFFF"
+    app:pfl_specular="1.2"
+    app:pfl_chromaticAberration="35.0"
+    app:pfl_captureDownsample="balanced" />

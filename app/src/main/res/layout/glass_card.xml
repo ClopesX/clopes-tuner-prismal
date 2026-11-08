@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cartao de vidro liquido (Prismal). O conteudo e adicionado por codigo. -->
+<com.matrix.prismal.PrismalFrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    app:pfl_cornerRadius="18dp"
+    app:pfl_blurRadius="16"
+    app:pfl_glassColor="#1FFFFFFF"
+    app:pfl_transmittance="0.92"
+    app:pfl_specular="1.2"
+    app:pfl_chromaticAberration="35.0"
+    app:pfl_captureDownsample="balanced"
+    app:pfl_ior="1.75"
+    app:pfl_glassThickness="260dp"
+    app:pfl_normalStrength="2.0"
+    app:pfl_displacementScale="5.5"
+    app:pfl_lensRefractionScale="5.5"
+    app:pfl_highlightWidth="0.75"
+    app:pfl_rimStrength="0.85"
+    app:pfl_fresnelReflect="1.5"
+    app:pfl_liquidDome="2.4" />
+
+
+
+
+
